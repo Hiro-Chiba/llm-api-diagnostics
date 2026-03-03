@@ -1,6 +1,7 @@
 """Gemini API モデル診断スクリプト
 
-利用可能な全モデルに対して短文生成テストを実行し、結果をサマリ表示する。
+利用可能な全モデル + Preview モデルに対して短文生成テストを実行し、結果をサマリ表示する。
+list() API は GA モデルのみ返すため、Preview モデルは別途明示的にテストする。
 """
 
 import os
@@ -90,13 +91,16 @@ def main() -> None:
         print(f"  モデル一覧取得失敗: {e}")
         return
 
+    # list() に含まれるモデル名を集める
+    listed_names = set()
     summary: dict[str, str] = {}
 
     # 各モデル診断
     # SDK内部で API の supportedGenerationMethods が supported_actions にマッピングされる
-    print("\n[2] 各モデルで短文生成テスト")
+    print("\n[2] 各モデルで短文生成テスト（list() 取得分）")
     for m in models:
         name = m.name
+        listed_names.add(name)
         supported = m.supported_actions or []
         if supported and "generateContent" not in supported:
             summary[name] = "SKIPPED"
@@ -109,6 +113,23 @@ def main() -> None:
 
         # レート制限回避
         time.sleep(2)
+
+    # Preview モデルは list() に含まれないことがあるため明示的にテスト
+    # この一覧は定期的に更新が必要
+    preview_models = [
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3-pro-image-preview",
+        "gemini-3.1-flash-image-preview",
+    ]
+    extra = [name for name in preview_models if name not in listed_names]
+    if extra:
+        print(f"\n[3] Preview モデル追加テスト（list() 未収録分: {len(extra)} 件）")
+        for name in extra:
+            print(f"\n--- {name} ---")
+            status = test_model(client, name)
+            summary[name] = status
+            time.sleep(2)
 
     print_summary(summary)
     print("\n診断完了。")
