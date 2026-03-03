@@ -1,0 +1,56 @@
+name: Preview モデル一覧の自動更新
+
+on:
+  schedule:
+    # 毎週月曜 9:00 JST（日曜 24:00 UTC）
+    - cron: "0 0 * * 1"
+  workflow_dispatch: # 手動実行も可能
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Preview モデル一覧を取得・更新
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python scripts/update_preview_models.py
+
+      - name: 差分があれば PR 作成
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet; then
+            echo "変更なし。終了します。"
+            exit 0
+          fi
+
+          BRANCH="auto/update-preview-models"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add gemini/model_checker.py
+          git commit -m "Preview モデル一覧を自動更新"
+          git push --force-with-lease origin "$BRANCH"
+
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            echo "既存 PR #$EXISTING あり。スキップ。"
+          else
+            BODY="## 概要"
+            BODY="${BODY}\n\nGitHub Actions が Gemini API（v1beta / v1）を比較し、"
+            BODY="${BODY}\nPreview モデルの追加・廃止を検出して \`model_checker.py\` を更新しました。"
+            BODY="${BODY}\n\nマージ前に差分を確認してください。"
+            gh pr create \
+              --title "Preview モデル一覧を自動更新" \
+              --body "$(echo -e "$BODY")"
+          fi
