@@ -65,7 +65,7 @@ def print_summary(summary: dict[str, str]) -> None:
     print(f"{'モデル':<{max_name}}  ステータス")
     print(f"{'-' * max_name}  {'-' * 15}")
     for name, status in summary.items():
-        icon = {"OK": "✅", "EMPTY": "⚠️", "QUOTA": "⏳", "INVALID": "❌", "SKIPPED": "⏭️"}.get(status, "❌")
+        icon = {"OK": "✅", "EMPTY": "⚠️", "QUOTA": "⏳", "INVALID": "❌"}.get(status, "❌")
         print(f"{name:<{max_name}}  {icon} {status}")
     print(f"{'=' * (max_name + 20)}")
 
@@ -96,13 +96,6 @@ def main() -> None:
     print("\n[2] 各モデルで短文生成テスト")
     for m in models:
         name = m.name
-        # generateContent 対応チェック
-        supported = getattr(m, "supported_actions", None) or []
-        if supported and "generateContent" not in supported:
-            summary[name] = "SKIPPED"
-            print(f"\n--- {name} --- generateContent 非対応 → SKIPPED")
-            continue
-
         print(f"\n--- {name} ---")
         status = test_model(client, name)
         summary[name] = status
