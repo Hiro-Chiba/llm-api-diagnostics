@@ -59,13 +59,13 @@ def print_summary(summary: dict[str, str]) -> None:
         return
 
     max_name = max(len(name) for name in summary)
-    max_name = max(max_name, 6)  # "モデル" の幅確保
+    max_name = max(max_name, 5)
 
     print(f"\n{'=' * (max_name + 20)}")
-    print(f"{'モデル':<{max_name}}  ステータス")
+    print(f"{'Model':<{max_name}}  Status")
     print(f"{'-' * max_name}  {'-' * 15}")
     for name, status in summary.items():
-        icon = {"OK": "✅", "EMPTY": "⚠️", "QUOTA": "⏳", "INVALID": "❌"}.get(status, "❌")
+        icon = {"OK": "✅", "EMPTY": "⚠️", "QUOTA": "⏳", "INVALID": "❌", "SKIPPED": "⏭️"}.get(status, "❌")
         print(f"{name:<{max_name}}  {icon} {status}")
     print(f"{'=' * (max_name + 20)}")
 
@@ -93,9 +93,16 @@ def main() -> None:
     summary: dict[str, str] = {}
 
     # 各モデル診断
+    # SDK内部で API の supportedGenerationMethods が supported_actions にマッピングされる
     print("\n[2] 各モデルで短文生成テスト")
     for m in models:
         name = m.name
+        supported = m.supported_actions or []
+        if supported and "generateContent" not in supported:
+            summary[name] = "SKIPPED"
+            print(f"\n--- {name} --- generateContent 非対応 → SKIPPED")
+            continue
+
         print(f"\n--- {name} ---")
         status = test_model(client, name)
         summary[name] = status
