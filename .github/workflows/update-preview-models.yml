@@ -4,7 +4,7 @@ on:
   schedule:
     # 毎週月曜 9:00 JST（日曜 24:00 UTC）
     - cron: "0 0 * * 1"
-  workflow_dispatch: # 手動実行も可能
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -37,7 +37,6 @@ jobs:
           TIME=$(date +'%H:%M:%S %Z')
           LOGFILE="logs/${DATE}.md"
 
-          # リダイレクト前に存在判定する（{ ... } >> $LOGFILE はブロック実行前にファイルを作るため）
           IS_NEW=0
           [ -f "$LOGFILE" ] || IS_NEW=1
 
@@ -66,83 +65,56 @@ jobs:
           elif git diff --quiet gemini/model_checker.py; then
             echo "**ステータス**: 成功（差分なし）" >> "$LOGFILE"
           else
-            echo "**ステータス**: 成功（model_checker.py に差分あり → PR 作成）" >> "$LOGFILE"
+            echo "**ステータス**: 成功（model_checker.py に差分あり）" >> "$LOGFILE"
           fi
 
           echo >> "$LOGFILE"
 
-          echo "logfile=$LOGFILE" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "script_status=$STATUS" >> "$GITHUB_OUTPUT"
 
-          # Python 失敗時はステップを失敗にする（ログ保存ステップは if: always() で走る）
-          exit $STATUS
-
-      - name: ログを main にコミット
-        if: always()
+      - name: PR を作成して auto-merge を有効化
+        if: always() && steps.run.outcome != 'cancelled'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [ -z "$(git status --porcelain logs/)" ]; then
-            echo "logs/ に変更なし。スキップ。"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "変更なし。PR 作成スキップ。"
             exit 0
           fi
 
+          DATE="${{ steps.run.outputs.date }}"
+          BRANCH="auto/run-${DATE}-${GITHUB_RUN_ID}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add logs/
-          git commit -m "ci: add execution log"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "Preview モデル一覧と実行ログを更新 (${DATE})"
+          git push origin "$BRANCH"
 
-          # 競合回避: 最新の main に対して rebase してから push
-          # 作業ツリーに未 stage な変更があっても autostash で扱う
-          git fetch origin main
-          git rebase --autostash origin/main
-          git push origin HEAD:main
-
-      - name: model_checker.py に差分があれば PR 作成
-        if: steps.run.outputs.script_status == '0'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if git diff --quiet gemini/model_checker.py; then
-            echo "model_checker.py 変更なし。PR 作成スキップ。"
-            exit 0
-          fi
-
-          BRANCH="auto/update-preview-models"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$BRANCH"
-          git add gemini/model_checker.py
-          git commit -m "Preview モデル一覧を自動更新"
-
-          # --force-with-lease が remote-tracking ref を必要とするため、
-          # リモートに既存のブランチがあれば先に fetch しておく
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-            git fetch origin "$BRANCH":"refs/remotes/origin/$BRANCH"
-          fi
-          git push --force-with-lease origin "$BRANCH"
-
-          EXISTING_COUNT=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')
-          if [ "${EXISTING_COUNT:-0}" -gt 0 ]; then
-            echo "既存 PR あり（${EXISTING_COUNT} 件）。作成はスキップ。"
-          else
-            gh pr create \
-              --title "Preview モデル一覧を自動更新" \
-              --body "$(cat <<'EOF'
+          PR_URL=$(gh pr create \
+            --title "Preview モデル一覧・実行ログを自動更新 (${DATE})" \
+            --body "$(cat <<'EOF'
           ## 概要
 
           GitHub Actions が Gemini API（v1beta / v1）を比較し、
-          Preview モデルの追加・廃止を検出して `model_checker.py` を更新しました。
+          Preview モデルの追加・廃止および実行ログを反映しました。
 
-          マージ前に差分を確認してください。
+          CI 成功後に auto-merge が発火します。
 
           ## 実行ログ
 
           `logs/` ディレクトリの対応する日付ファイルを参照してください。
           EOF
-          )"
-          fi
+          )")
+
+          gh pr merge "$PR_URL" --auto --merge --delete-branch
+
+      - name: スクリプト失敗時はジョブも失敗にする
+        if: always() && steps.run.outputs.script_status != '0'
+        run: |
+          echo "update_preview_models.py が失敗しました (exit ${{ steps.run.outputs.script_status }})"
+          exit 1
