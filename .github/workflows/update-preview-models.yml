@@ -37,8 +37,12 @@ jobs:
           TIME=$(date +'%H:%M:%S %Z')
           LOGFILE="logs/${DATE}.md"
 
+          # リダイレクト前に存在判定する（{ ... } >> $LOGFILE はブロック実行前にファイルを作るため）
+          IS_NEW=0
+          [ -f "$LOGFILE" ] || IS_NEW=1
+
           {
-            if [ ! -f "$LOGFILE" ]; then
+            if [ "$IS_NEW" = "1" ]; then
               echo "# ${DATE} 実行ログ"
               echo
             fi
