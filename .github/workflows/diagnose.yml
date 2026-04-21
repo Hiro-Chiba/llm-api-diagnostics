@@ -1,4 +1,4 @@
-name: Preview モデル一覧の自動更新
+name: LLM API 動作診断 (週次)
 
 on:
   schedule:
@@ -11,11 +11,11 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: update-preview-models
+  group: llm-api-diagnostics
   cancel-in-progress: false
 
 jobs:
-  update:
+  diagnose:
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Tokyo
@@ -26,8 +26,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Preview モデル一覧を取得・更新
-        id: run
+      - name: 依存パッケージをインストール
+        run: pip install -r requirements.txt
+
+      - name: Preview モデル一覧を内部的に最新化
+        id: refresh
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        continue-on-error: true
+        run: python scripts/update_preview_models.py
+
+      - name: 全モデルに対して短文生成テストを実行
+        id: diag
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
@@ -42,7 +52,7 @@ jobs:
 
           {
             if [ "$IS_NEW" = "1" ]; then
-              echo "# ${DATE} 実行ログ"
+              echo "# ${DATE} モデル診断ログ"
               echo
             fi
             echo "## ${TIME}"
@@ -51,7 +61,7 @@ jobs:
           } >> "$LOGFILE"
 
           set +e
-          python scripts/update_preview_models.py 2>&1 | tee -a "$LOGFILE"
+          python gemini/model_checker.py 2>&1 | tee -a "$LOGFILE"
           STATUS=${PIPESTATUS[0]}
           set -e
 
@@ -61,22 +71,19 @@ jobs:
           } >> "$LOGFILE"
 
           if [ "$STATUS" -ne 0 ]; then
-            echo "**ステータス**: 失敗 (exit $STATUS)" >> "$LOGFILE"
-          elif git diff --quiet gemini/model_checker.py; then
-            echo "**ステータス**: 成功（差分なし）" >> "$LOGFILE"
+            echo "**診断ステータス**: 失敗 (exit $STATUS)" >> "$LOGFILE"
           else
-            echo "**ステータス**: 成功（model_checker.py に差分あり）" >> "$LOGFILE"
+            echo "**診断ステータス**: 正常終了" >> "$LOGFILE"
           fi
-
           echo >> "$LOGFILE"
 
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "script_status=$STATUS" >> "$GITHUB_OUTPUT"
 
       - name: PR を作成して auto-merge を有効化
-        if: always() && steps.run.outcome != 'cancelled'
+        if: always() && steps.diag.outcome != 'cancelled'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -85,36 +92,37 @@ jobs:
             exit 0
           fi
 
-          DATE="${{ steps.run.outputs.date }}"
-          BRANCH="auto/run-${DATE}-${GITHUB_RUN_ID}"
+          DATE="${{ steps.diag.outputs.date }}"
+          BRANCH="auto/diag-${DATE}-${GITHUB_RUN_ID}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add -A
-          git commit -m "Preview モデル一覧と実行ログを更新 (${DATE})"
+          git commit -m "診断ログと preview 一覧を更新 (${DATE})"
           git push origin "$BRANCH"
 
           PR_URL=$(gh pr create \
-            --title "Preview モデル一覧・実行ログを自動更新 (${DATE})" \
+            --title "Gemini API 動作診断ログ (${DATE})" \
             --body "$(cat <<'EOF'
           ## 概要
 
-          GitHub Actions が Gemini API（v1beta / v1）を比較し、
-          Preview モデルの追加・廃止および実行ログを反映しました。
+          GitHub Actions が全モデルに対して `generate_content` で短文生成テストを実行し、
+          各モデルの応答状況を `logs/` に保存しました。必要に応じて
+          `gemini/model_checker.py` の Preview モデル一覧も最新化されています。
 
           CI 成功後に auto-merge が発火します。
 
-          ## 実行ログ
+          ## 参照
 
-          `logs/` ディレクトリの対応する日付ファイルを参照してください。
+          `logs/` ディレクトリの対応する日付ファイルに、各モデルの結果と Summary テーブルが含まれます。
           EOF
           )")
 
           gh pr merge "$PR_URL" --auto --merge --delete-branch
 
-      - name: スクリプト失敗時はジョブも失敗にする
-        if: always() && steps.run.outputs.script_status != '0'
+      - name: 診断スクリプトが失敗していればジョブも失敗にする
+        if: always() && steps.diag.outputs.script_status != '0'
         run: |
-          echo "update_preview_models.py が失敗しました (exit ${{ steps.run.outputs.script_status }})"
+          echo "model_checker.py が失敗しました (exit ${{ steps.diag.outputs.script_status }})"
           exit 1
