@@ -126,10 +126,37 @@ def main() -> None:
     # Preview モデルは list() に含まれないことがあるため明示的にテスト
     # この一覧は GitHub Actions で自動更新される
     preview_models = [
-        "gemini-3.1-pro-preview",
+        "deep-research-max-preview-04-2026",
+        "deep-research-preview-04-2026",
+        "deep-research-pro-preview-12-2025",
+        "gemini-2.5-computer-use-preview-10-2025",
+        "gemini-2.5-flash-image",
+        "gemini-2.5-flash-preview-tts",
+        "gemini-2.5-pro-preview-tts",
         "gemini-3-flash-preview",
         "gemini-3-pro-image-preview",
+        "gemini-3-pro-preview",
         "gemini-3.1-flash-image-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-tts-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-pro-latest",
+        "gemini-robotics-er-1.5-preview",
+        "gemini-robotics-er-1.6-preview",
+        "gemma-3-12b-it",
+        "gemma-3-1b-it",
+        "gemma-3-27b-it",
+        "gemma-3-4b-it",
+        "gemma-3n-e2b-it",
+        "gemma-3n-e4b-it",
+        "gemma-4-26b-a4b-it",
+        "gemma-4-31b-it",
+        "lyria-3-clip-preview",
+        "lyria-3-pro-preview",
+        "nano-banana-pro-preview",
     ]
     extra = [name for name in preview_models if name not in listed_names]
     if extra:
