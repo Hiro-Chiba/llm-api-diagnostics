@@ -8,45 +8,58 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 
 API_BASE = "https://generativelanguage.googleapis.com"
 MODEL_CHECKER_PATH = os.path.join(os.path.dirname(__file__), "..", "gemini", "model_checker.py")
+HTTP_TIMEOUT_SEC = 30
+MAX_PAGES = 50
+REQUEST_INTERVAL_SEC = 1.0  # レート制限対策: API 呼び出し間の最小インターバル
+
+
+def _fetch_json(url: str, api_key: str) -> dict:
+    """API キーはヘッダーで送り、URL には含めない。エラー時は API キーを漏らさない。"""
+    req = urllib.request.Request(url, headers={"x-goog-api-key": api_key})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} {e.reason}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"ネットワークエラー: {e.reason}") from None
+    except TimeoutError:
+        raise RuntimeError(f"タイムアウト（{HTTP_TIMEOUT_SEC}s）") from None
+
+
+def _paginate(path: str, api_key: str) -> list[dict]:
+    """pageToken を辿って全ページをまとめて返す。ページ数には上限を設ける。"""
+    items: list[dict] = []
+    params = {"pageSize": "100"}
+    for page in range(MAX_PAGES):
+        if page > 0:
+            time.sleep(REQUEST_INTERVAL_SEC)
+        url = f"{API_BASE}{path}?{urlencode(params)}"
+        data = _fetch_json(url, api_key)
+        items.extend(data.get("models", []))
+        token = data.get("nextPageToken")
+        if not token:
+            return items
+        params["pageToken"] = token
+    raise RuntimeError(f"ページ数が上限（{MAX_PAGES}）を超えました")
 
 
 def fetch_all_models(api_key: str) -> list[dict]:
     """v1beta API から全モデルを取得する（Preview 含む）。"""
-    models = []
-    url = f"{API_BASE}/v1beta/models?key={api_key}&pageSize=100"
-    while url:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read())
-        models.extend(data.get("models", []))
-        token = data.get("nextPageToken")
-        if token:
-            url = f"{API_BASE}/v1beta/models?key={api_key}&pageSize=100&pageToken={token}"
-        else:
-            url = None
-    return models
+    return _paginate("/v1beta/models", api_key)
 
 
 def fetch_ga_model_names(api_key: str) -> set[str]:
     """v1 API（GA のみ）からモデル名を取得する。"""
-    names = set()
-    url = f"{API_BASE}/v1/models?key={api_key}&pageSize=100"
-    while url:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read())
-        for m in data.get("models", []):
-            names.add(m["name"].removeprefix("models/"))
-        token = data.get("nextPageToken")
-        if token:
-            url = f"{API_BASE}/v1/models?key={api_key}&pageSize=100&pageToken={token}"
-        else:
-            url = None
-    return names
+    models = _paginate("/v1/models", api_key)
+    return {m["name"].removeprefix("models/") for m in models}
 
 
 def find_preview_models(all_models: list[dict], ga_names: set[str]) -> list[str]:
@@ -85,6 +98,7 @@ def update_model_checker(path: str, new_list: list[str]) -> bool:
         r"preview_models\s*=\s*\[.*?\]",
         new_block,
         content,
+        count=1,
         flags=re.DOTALL,
     )
 
@@ -97,20 +111,26 @@ def update_model_checker(path: str, new_list: list[str]) -> bool:
 
 
 def main() -> None:
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not api_key:
         print("GEMINI_API_KEY が設定されていません。")
         sys.exit(1)
 
     path = os.path.normpath(MODEL_CHECKER_PATH)
 
-    print("v1beta API から全モデル取得中...")
-    all_models = fetch_all_models(api_key)
-    print(f"  {len(all_models)} モデル取得")
+    try:
+        print("v1beta API から全モデル取得中...")
+        all_models = fetch_all_models(api_key)
+        print(f"  {len(all_models)} モデル取得")
 
-    print("v1 API から GA モデル取得中...")
-    ga_names = fetch_ga_model_names(api_key)
-    print(f"  {len(ga_names)} GA モデル取得")
+        time.sleep(REQUEST_INTERVAL_SEC)
+
+        print("v1 API から GA モデル取得中...")
+        ga_names = fetch_ga_model_names(api_key)
+        print(f"  {len(ga_names)} GA モデル取得")
+    except RuntimeError as e:
+        print(f"API 呼び出し失敗: {e}")
+        sys.exit(1)
 
     preview = find_preview_models(all_models, ga_names)
     print(f"  Preview（generateContent 対応）: {len(preview)} 件")
